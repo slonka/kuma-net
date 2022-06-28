@@ -11,18 +11,31 @@ import (
 func buildMeshInbound(cfg config.TrafficFlow, prefix string, meshInboundRedirect string) *Chain {
 	meshInbound := NewChain(cfg.Chain.GetFullName(prefix))
 
-	// Excluded inbound ports
-	for _, port := range cfg.ExcludePorts {
+	if cfg.RedirectAllPorts {
+		// Excluded inbound ports
+		for _, port := range cfg.ExcludePorts {
+			meshInbound.Append(
+				Protocol(Tcp(DestinationPort(port))),
+				Jump(Return()),
+			)
+		}
 		meshInbound.Append(
-			Protocol(Tcp(DestinationPort(port))),
+			Protocol(Tcp()),
+			Jump(ToUserDefinedChain(meshInboundRedirect)),
+		)
+
+	} else {
+		for _, port := range cfg.ExcludePorts {
+			meshInbound.Append(
+				Protocol(Tcp(DestinationPort(port))),
+				Jump(ToUserDefinedChain(meshInboundRedirect)),
+			)
+		}
+		meshInbound.Append(
+			Protocol(Tcp()),
 			Jump(Return()),
 		)
 	}
-
-	meshInbound.Append(
-		Protocol(Tcp()),
-		Jump(ToUserDefinedChain(meshInboundRedirect)),
-	)
 
 	return meshInbound
 }
@@ -75,43 +88,85 @@ func buildMeshOutbound(cfg config.Config, loopback string, ipv6 bool) *Chain {
 			Jump(Return()),
 		)
 
-	// Excluded outbound ports
-	for _, port := range excludePorts {
+	if cfg.Redirect.Outbound.RedirectAllPorts {
+		// Excluded outbound ports
+		for _, port := range excludePorts {
+			meshOutbound.Append(
+				Protocol(Tcp(DestinationPort(port))),
+				Jump(Return()),
+			)
+		}
+
+		meshOutbound.
+			Append(
+				Protocol(Tcp(NotDestinationPortIf(cfg.ShouldRedirectDNS, DNSPort))),
+				OutInterface(loopback),
+				NotDestination(localhost),
+				Match(Owner(Uid(uid))),
+				Jump(ToUserDefinedChain(inboundRedirectChainName)),
+			).
+			Append(
+				Protocol(Tcp(NotDestinationPortIf(cfg.ShouldRedirectDNS, DNSPort))),
+				OutInterface(loopback),
+				Match(Owner(NotUid(uid))),
+				Jump(Return()),
+			).
+			Append(
+				Match(Owner(Uid(uid))),
+				Jump(Return()),
+			).
+			AppendIf(cfg.ShouldRedirectDNS,
+				Protocol(Tcp(DestinationPort(DNSPort))),
+				Jump(ToPort(dnsRedirectPort)),
+			).
+			Append(
+				Destination(localhost),
+				Jump(Return()),
+			).
+			Append(
+				Jump(ToUserDefinedChain(outboundRedirectChainName)),
+			)
+
+	} else {
+		meshOutbound.
+			Append(
+				Protocol(Tcp(NotDestinationPortIf(cfg.ShouldRedirectDNS, DNSPort))),
+				OutInterface(loopback),
+				NotDestination(localhost),
+				Match(Owner(Uid(uid))),
+				Jump(ToUserDefinedChain(inboundRedirectChainName)),
+			).
+			Append(
+				Protocol(Tcp(NotDestinationPortIf(cfg.ShouldRedirectDNS, DNSPort))),
+				OutInterface(loopback),
+				Match(Owner(NotUid(uid))),
+				Jump(Return()),
+			).
+			Append(
+				Match(Owner(Uid(uid))),
+				Jump(Return()),
+			).
+			AppendIf(cfg.ShouldRedirectDNS,
+				Protocol(Tcp(DestinationPort(DNSPort))),
+				Jump(ToPort(dnsRedirectPort)),
+			).
+			Append(
+				Destination(localhost),
+				Jump(Return()),
+			)
+
+		for _, port := range cfg.Redirect.Outbound.ExcludePorts {
+			meshOutbound.Append(
+				Protocol(Tcp(DestinationPort(port))),
+				Jump(ToUserDefinedChain(outboundRedirectChainName)),
+			)
+		}
+
 		meshOutbound.Append(
-			Protocol(Tcp(DestinationPort(port))),
+			Protocol(Tcp()),
 			Jump(Return()),
 		)
 	}
-
-	meshOutbound.
-		Append(
-			Protocol(Tcp(NotDestinationPortIf(cfg.ShouldRedirectDNS, DNSPort))),
-			OutInterface(loopback),
-			NotDestination(localhost),
-			Match(Owner(Uid(uid))),
-			Jump(ToUserDefinedChain(inboundRedirectChainName)),
-		).
-		Append(
-			Protocol(Tcp(NotDestinationPortIf(cfg.ShouldRedirectDNS, DNSPort))),
-			OutInterface(loopback),
-			Match(Owner(NotUid(uid))),
-			Jump(Return()),
-		).
-		Append(
-			Match(Owner(Uid(uid))),
-			Jump(Return()),
-		).
-		AppendIf(cfg.ShouldRedirectDNS,
-			Protocol(Tcp(DestinationPort(DNSPort))),
-			Jump(ToPort(dnsRedirectPort)),
-		).
-		Append(
-			Destination(localhost),
-			Jump(Return()),
-		).
-		Append(
-			Jump(ToUserDefinedChain(outboundRedirectChainName)),
-		)
 
 	return meshOutbound
 }

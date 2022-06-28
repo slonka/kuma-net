@@ -13,11 +13,12 @@ type Owner struct {
 
 // TrafficFlow is a struct for Inbound/Outbound configuration
 type TrafficFlow struct {
-	Port          uint16
-	PortIPv6      uint16
-	Chain         Chain
-	RedirectChain Chain
-	ExcludePorts  []uint16
+	Port             uint16
+	PortIPv6         uint16
+	Chain            Chain
+	RedirectChain    Chain
+	RedirectAllPorts bool
+	ExcludePorts     []uint16
 }
 
 type DNS struct {

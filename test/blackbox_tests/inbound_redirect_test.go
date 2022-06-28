@@ -86,7 +86,7 @@ var _ = Describe("Inbound IPv4 TCP traffic from any ports", func() {
 	)
 })
 
-var _ = Describe("Inbound IPv6 TCP traffic from any ports", func() {
+var _ = FDescribe("Inbound IPv6 TCP traffic from any ports", func() {
 	var err error
 	var ns *netns.NetNS
 
@@ -243,7 +243,7 @@ var _ = Describe("Inbound IPv4 TCP traffic from any ports except excluded ones",
 	)
 })
 
-var _ = Describe("Inbound IPv6 TCP traffic from any ports except excluded ones", func() {
+var _ = FDescribe("Inbound IPv6 TCP traffic from any ports except excluded ones", func() {
 	var err error
 	var ns *netns.NetNS
 
@@ -309,12 +309,185 @@ var _ = Describe("Inbound IPv6 TCP traffic from any ports except excluded ones",
 			var entries []TableEntry
 			var lockedPorts []uint16
 
-			for i := 0; i < blackbox_tests.TestCasesAmount; i++ {
+			for i := 0; i < 1; i++ {
 				randomPorts := socket.GenerateRandomPortsSlice(3, lockedPorts...)
 				// This gives us more entropy as all generated ports will be
 				// different from each other
 				lockedPorts = append(lockedPorts, randomPorts...)
 				desc := fmt.Sprintf("to port %%d, from port %%d (excluded: %%d)")
+				entry := Entry(
+					EntryDescription(desc),
+					randomPorts[0],
+					randomPorts[1],
+					randomPorts[2],
+				)
+				entries = append(entries, entry)
+			}
+
+			return entries
+		}(),
+	)
+})
+
+var _ = Describe("Inbound IPv4 TCP traffic from only redirected ports", func() {
+	var err error
+	var ns *netns.NetNS
+
+	BeforeEach(func() {
+		ns, err = netns.NewNetNSBuilder().Build()
+		Expect(err).To(BeNil())
+	})
+
+	AfterEach(func() {
+		Expect(ns.Cleanup()).To(Succeed())
+	})
+
+	DescribeTable("should be redirected to the inbound_redirection port",
+		func(serverPort, randomPort, redirectPort uint16) {
+			// given
+			tproxyConfig := config.Config{
+				Redirect: config.Redirect{
+					Inbound: config.TrafficFlow{
+						Port:             serverPort,
+						RedirectAllPorts: false,
+						ExcludePorts:     []uint16{redirectPort},
+					},
+				},
+				RuntimeOutput: ioutil.Discard,
+			}
+			peerAddress := ns.Veth().PeerAddress()
+
+			redirectReadyC, redirectErrC := tcp.UnsafeStartTCPServer(
+				ns,
+				fmt.Sprintf(":%d", serverPort),
+				tcp.ReplyWithOriginalDstIPv4,
+				tcp.CloseConn,
+			)
+			Eventually(redirectReadyC).Should(BeClosed())
+			Consistently(redirectErrC).ShouldNot(Receive())
+
+			randomReadyC, randomErrC := tcp.UnsafeStartTCPServer(
+				ns,
+				fmt.Sprintf(":%d", randomPort),
+				tcp.ReplyWith("random"),
+				tcp.CloseConn,
+			)
+			Eventually(randomReadyC).Should(BeClosed())
+			Consistently(randomErrC).ShouldNot(Receive())
+
+			// when
+			Eventually(ns.UnsafeExec(func() {
+				Expect(builder.RestoreIPTables(tproxyConfig)).Error().To(Succeed())
+			})).Should(BeClosed())
+
+			// then
+			Expect(tcp.DialIPWithPortAndGetReply(peerAddress, redirectPort)).
+				To(Equal(fmt.Sprintf("%s:%d", peerAddress, redirectPort)))
+
+			// then
+			Expect(tcp.DialIPWithPortAndGetReply(peerAddress, randomPort)).To(Equal("random"))
+
+			// then
+			Eventually(redirectErrC).Should(BeClosed())
+			Eventually(randomErrC).Should(BeClosed())
+		},
+		func() []TableEntry {
+			var entries []TableEntry
+			var lockedPorts []uint16
+
+			for i := 0; i < 1; i++ {
+				randomPorts := socket.GenerateRandomPortsSlice(3, lockedPorts...)
+				// This gives us more entropy as all generated ports will be
+				// different from each other
+				lockedPorts = append(lockedPorts, randomPorts...)
+				desc := fmt.Sprintf("to port %%d, from port %%d (redirect: %%d)")
+				entry := Entry(
+					EntryDescription(desc),
+					randomPorts[0],
+					randomPorts[1],
+					randomPorts[2],
+				)
+				entries = append(entries, entry)
+			}
+
+			return entries
+		}(),
+	)
+})
+
+var _ = FDescribe("Inbound IPv6 TCP ttraffic from only redirected ports", func() {
+	var err error
+	var ns *netns.NetNS
+
+	BeforeEach(func() {
+		ns, err = netns.NewNetNSBuilder().WithIPv6(true).Build()
+		Expect(err).To(BeNil())
+	})
+
+	AfterEach(func() {
+		Expect(ns.Cleanup()).To(Succeed())
+	})
+
+	DescribeTable("should be redirected to the inbound_redirection port",
+		func(serverPort, randomPort, redirectPort uint16) {
+			// given
+			tproxyConfig := config.Config{
+				Redirect: config.Redirect{
+					Inbound: config.TrafficFlow{
+						PortIPv6:         serverPort,
+						RedirectAllPorts: false,
+						ExcludePorts:     []uint16{redirectPort},
+					},
+				},
+				IPv6:          true,
+				RuntimeOutput: ioutil.Discard,
+			}
+			peerAddress := ns.Veth().PeerAddress()
+
+			redirectReadyC, redirectErrC := tcp.UnsafeStartTCPServer(
+				ns,
+				fmt.Sprintf(":%d", serverPort),
+				tcp.ReplyWithOriginalDstIPv6,
+				tcp.CloseConn,
+			)
+			Eventually(redirectReadyC).Should(BeClosed())
+			Consistently(redirectErrC).ShouldNot(Receive())
+
+			randomReadyC, randomErrC := tcp.UnsafeStartTCPServer(
+				ns,
+				fmt.Sprintf(":%d", randomPort),
+				tcp.ReplyWith("random"),
+				tcp.CloseConn,
+			)
+			Eventually(randomReadyC).Should(BeClosed())
+			Consistently(randomErrC).ShouldNot(Receive())
+
+			// when
+			Eventually(ns.UnsafeExec(func() {
+				Expect(builder.RestoreIPTables(tproxyConfig)).Error().To(Succeed())
+			})).Should(BeClosed())
+
+			// then
+			Expect(tcp.DialIPWithPortAndGetReply(peerAddress, redirectPort)).
+				To(Equal(fmt.Sprintf("[%s]:%d", peerAddress, redirectPort)))
+
+			// then
+			Expect(tcp.DialIPWithPortAndGetReply(peerAddress, randomPort)).To(Equal("random"))
+
+			// then
+			Eventually(redirectErrC).Should(BeClosed())
+			Eventually(randomErrC).Should(BeClosed())
+		},
+		func() []TableEntry {
+			var entries []TableEntry
+			var lockedPorts []uint16
+
+			for i := 0; i < 1; i++ {
+				randomPorts := socket.GenerateRandomPortsSlice(3, lockedPorts...)
+				// This gives us more entropy as all generated ports will be
+				// different from each other
+				lockedPorts = append(lockedPorts, randomPorts...)
+				desc := fmt.Sprintf("to port %%d, from port %%d (redirect: %%d)")
 				entry := Entry(
 					EntryDescription(desc),
 					randomPorts[0],
